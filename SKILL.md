@@ -1,91 +1,136 @@
 ---
-name: chatgpt-browser-image-loop
-description: Run planned image-generation tasks through the logged-in ChatGPT web app in Codex's in-app browser, paste local reference images through the clipboard, submit Codex-written prompts, download generated images, and iterate with evidence-based prompt corrections until the task-specific QA contract passes or a stop condition occurs. Use when a plan requires ChatGPT web image generation, reference-guided image editing, automatic local image QA, or a generate-review-revise loop.
+name: codex-image2free
+description: Run planned image-generation and image-editing tasks through the logged-in ChatGPT web app in Codex's in-app browser, paste local reference images through the clipboard, submit Codex-written prompts, retrieve generated images, and iterate with local QA until explicit acceptance criteria pass or a stop condition occurs. Use for ChatGPT web image generation, reference-guided image editing, automatic visual QA, or a generate-review-revise loop that should minimize browser overhead.
 ---
 
-# ChatGPT Browser Image Loop
+# codex-image2free
 
-Execute image jobs from a Codex plan in the ChatGPT web interface, then bring each result back into Codex for local QA and iterative correction.
+Route image jobs from a Codex plan through ChatGPT's current web image generator, retrieve each result, and review it locally before accepting or revising it.
 
-## Protect authentication data
+The repository name does not guarantee zero cost or unlimited generation. ChatGPT account limits, rate limits, policies, and subscription terms still apply.
 
-Treat “save the login cookie” as “reuse the in-app browser's managed persistent profile.” Let the user sign in through the visible ChatGPT page once, then reuse that browser binding and profile while the session remains valid.
+## Protect authentication
 
-Never inspect, read, export, print, copy, serialize, commit, or otherwise handle cookies, local storage, passwords, tokens, or browser session files. Never include authentication data in the skill, repository, logs, prompts, or generated artifacts. If the session is signed out or challenged, ask the user to complete sign-in in the in-app browser and resume afterward.
+Reuse the in-app browser's managed persistent profile after the user signs in visibly. Never inspect, export, print, copy, serialize, or commit cookies, local storage, passwords, tokens, or browser profile files. If authentication expires or a challenge appears, pause and ask the user to sign in through the visible page.
 
-## Build an image-job contract
+## Build one job contract per output
 
-Before opening ChatGPT, turn every planned image task into a separate job with:
+Before opening ChatGPT, define:
 
-- a unique job ID and one requested output;
-- the ordered local reference-image paths, if any;
-- the generation or edit prompt;
-- hard requirements and forbidden elements;
-- a task-specific QA rubric and passing threshold;
-- a candidate output directory and non-destructive filename pattern;
-- optional user-defined iteration or cost limits.
+```yaml
+job_id: image-001
+task: "One requested output"
+mode: generate | edit
+references:
+  - path: /absolute/path/to/reference.png
+    role: "identity, product, composition, or style"
+prompt: "Full prompt written by Codex"
+hard_requirements:
+  - "Condition that must pass"
+forbidden_elements:
+  - "Element whose presence is an automatic failure"
+output_directory: /absolute/path/to/candidates
+qa_threshold: 85
+user_signoff_required: false
+max_iterations: null
+```
 
-Process jobs one at a time. Use a fresh ChatGPT conversation for each unrelated image job so references and instructions do not leak between tasks. Never batch multiple deliverables into a collage unless the plan explicitly requests one.
+Use runtime paths from the current task; never hardcode one user's paths in the Skill. Process unrelated jobs in separate conversations so references do not leak between tasks.
 
-Read [references/qa-loop-contract.md](references/qa-loop-contract.md) before executing the first job.
+## Use the fast browser path
 
-## Operate the in-app browser
+Use `browser:control-in-app-browser` and follow its current instructions. Optimize browser work as follows:
 
-Use `browser:control-in-app-browser` and follow its current instructions completely. Select the in-app browser explicitly, initialize its runtime from the installed Browser plugin path, read the browser's complete runtime documentation, and reuse the resulting browser binding across the job loop. Do not hardcode a plugin version, browser node ID, or undocumented API.
+1. Initialize the browser runtime only once per fresh execution session.
+2. Read the selected browser's complete runtime documentation only once per browser binding.
+3. Reuse the same in-app browser binding, tab, and ChatGPT conversation for all iterations of one job.
+4. Open a new conversation only when starting an unrelated job or when the existing context is corrupted.
+5. Do not re-upload reference images during corrections while the same conversation still retains them.
+6. Prefer DOM and page-asset operations over screenshots and coordinate-based clicking.
+7. Re-read the full visible DOM only after navigation, a major UI change, or a stale-node error. Reuse a verified composer node while the page state is unchanged.
+8. Combine stable actions into one browser execution when possible: focus the composer, paste ordered references, verify attachments, enter the prompt, and submit once.
+9. Take a page-asset inventory snapshot before submission. After generation, retrieve only the new asset IDs instead of rescanning or downloading every page image.
+10. Use short adaptive polling rather than fixed long sleeps: check completion or new page assets every 5–10 seconds, with each wait below 30 seconds.
 
-Navigate to `https://chatgpt.com/` and inspect visible page state. Confirm that the user is signed in. If authentication, CAPTCHA, account confirmation, or a consent screen blocks the task, pause and request the user's visible interaction; do not bypass it or switch browsers.
+Do not submit twice because a browser call timed out. Inspect visible state or asset inventory first.
 
-Use the image-generation mode currently exposed by ChatGPT. Do not hardcode a model name because the web product may rename or replace the image model.
+## Attach references and submit
 
-## Paste references and prompt
+Navigate to `https://chatgpt.com/`, confirm the visible session is signed in, and select the image-generation mode currently exposed by the site. Do not hardcode a model name.
 
-Prefer clipboard paste when the upload button or file chooser is unreliable:
+When the file chooser is unreliable:
 
-1. Re-read the visible DOM and find the current composer; node IDs are dynamic.
-2. Focus the composer.
-3. Read one local reference image, write it to the browser clipboard with its correct MIME type, and press the platform paste shortcut.
-4. Verify the attachment appears before pasting the next reference.
-5. Preserve the job contract's reference order.
-6. Paste or type the complete prompt only after all required references are attached.
+1. Focus the current composer.
+2. Read one local image and write it to the browser clipboard with the correct MIME type.
+3. Paste it using the platform shortcut.
+4. Confirm the attachment appears.
+5. Repeat in the job contract's reference order.
+6. Enter the complete prompt after the references are attached.
+7. Submit exactly once.
 
-Submit exactly once. A slow browser call is not proof of failure; inspect visible state before retrying so the same job is not submitted twice.
+## Retrieve the candidate
 
-## Retrieve and inspect the result
+Wait for the generation state to complete. Use the browser's documented page-asset or download capability to distinguish the new generated image from uploaded references. Save it as a new candidate file without overwriting references or accepted outputs.
 
-Wait for ChatGPT to finish. Identify the new generated image through the browser's documented page-asset or download capability. Distinguish generated outputs from uploaded references. Save only the intended generated asset to the candidate directory without overwriting references or previously accepted files.
+If the result cannot be retrieved and inspected locally, do not claim that it passed.
 
-Open the local candidate with the available image-inspection tool. Compare it against every hard requirement, forbidden element, reference image, and scored criterion in the job contract. Record concrete evidence, not impressions alone.
+## Apply the embedded QA contract
 
-Never claim a pass when the image cannot be retrieved or inspected.
+Require zero hard-gate failures and a total score at or above the job threshold. Use this default rubric unless the task supplies a better one:
 
-## Iterate with targeted corrections
+| Category | Weight | Evaluate |
+|---|---:|---|
+| Prompt and constraint fidelity | 30 | Subject, action, setting, count, format, required and forbidden elements |
+| Reference fidelity | 25 | Identity, product, layout, palette, or style assigned to each reference |
+| Composition and usability | 15 | Framing, crop, hierarchy, negative space, intended use |
+| Technical image quality | 15 | Anatomy, geometry, hands, edges, textures, lighting, artifacts, accidental text |
+| Task-specific criteria | 15 | Brand, continuity, safety, factual, or domain requirements |
 
-If the candidate fails:
+Record for every iteration:
 
-1. List the failed hard gates and the largest scoring deductions.
-2. Preserve everything that already passed.
-3. Write a delta prompt that changes only the failed attributes and explicitly locks passed attributes.
-4. Continue in the same ChatGPT conversation when its image context is intact; otherwise start a clean conversation and paste the necessary references plus the latest candidate.
-5. Submit once, retrieve the next candidate, and run the full QA contract again.
-6. Track iteration number, prompt, output path, score, hard-gate failures, and correction rationale.
+```yaml
+iteration: 1
+candidate_path: /absolute/path/to/candidate.png
+score: 78
+hard_gate_failures:
+  - "Required feature is missing"
+deductions:
+  - category: Reference fidelity
+    points: -12
+    evidence: "Visible mismatch against reference 02"
+passed_attributes:
+  - "Camera angle"
+next_delta_prompt: "Preserve the camera angle. Correct only..."
+```
 
-Continue until the image passes or a stop condition occurs. Do not repeat an unchanged prompt after a failure.
+Treat exact text errors, missing hard requirements, forbidden elements, and identity/product mismatches designated as exact as automatic failures.
+
+## Iterate efficiently
+
+When a candidate fails:
+
+1. Identify the failed hard gates and largest deductions.
+2. Lock every attribute that passed.
+3. Write a short delta prompt changing only the failed attributes; never resend the entire long creative brief unless context was lost.
+4. Continue in the same ChatGPT conversation and reuse its references.
+5. Retrieve the next asset using the page-asset inventory delta.
+6. Re-run the complete QA rubric because a correction can regress an earlier pass.
+
+Never repeat an unchanged prompt or add unrelated creative direction during repair.
 
 ## Stop conditions
 
-Stop the loop and report the current best candidate when any of these occurs:
+Stop when:
 
 - the QA contract passes;
 - the user stops or changes the task;
 - an explicit iteration, time, or cost limit is reached;
 - sign-in, CAPTCHA, rate limits, policy refusal, or browser unavailability blocks progress;
-- three consecutive iterations fail for substantially the same reason, indicating prompt-only correction is no longer making progress;
-- required reference files or acceptance criteria are missing and cannot be inferred safely.
+- three consecutive iterations fail for substantially the same reason;
+- required references or acceptance criteria are missing and cannot be inferred safely.
 
-The no-progress stop prevents an uncontrolled infinite loop. Do not weaken the acceptance standard merely to finish.
+Do not lower the acceptance threshold merely to finish. For subjective brand or artistic approval, mark the technical result as passed but still request user sign-off when the job contract requires it.
 
-## Complete the job
+## Report the result
 
-For a pass, return the accepted candidate path, final prompt, iteration count, QA score, and evidence that all hard gates passed. For a stop without a pass, return the best candidate, remaining failures, attempted corrections, and the exact blocker.
-
-Treat automated QA as final only when the job contract contains explicit, testable criteria. Mark subjective brand or artistic approval as requiring user sign-off even if the technical threshold passes.
+For a pass, return the accepted candidate path, final prompt, iteration count, QA score, and hard-gate evidence. For a stop without a pass, return the best candidate, remaining failures, attempted corrections, and exact blocker.
