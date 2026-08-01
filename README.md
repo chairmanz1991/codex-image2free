@@ -1,0 +1,2 @@
+# codex-image2free
+用codex内置浏览器在chatgpt里完成image2生图任务以节省codex额度
